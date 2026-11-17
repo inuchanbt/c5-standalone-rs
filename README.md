@@ -197,6 +197,11 @@ before enabling active protocol operations.
 
 ## Source and licensing
 
+See [LICENSE.md](LICENSE.md) for the component-by-component license scope,
+combined-firmware obligations and third-party/font notices. This is a mixed
+license repository; the Rust crate license is not a blanket MIT license for
+the linked C5 firmware.
+
 `upstream/` contains the specified repository snapshot and its dual
 MIT/Apache-2.0 license files, plus one C5 patch: a const empty-history constructor
 for in-place initialization without large stack copies. Runtime history behavior
