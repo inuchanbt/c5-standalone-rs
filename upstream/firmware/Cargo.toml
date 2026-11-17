@@ -1,0 +1,63 @@
+[package]
+name = "firmware"
+version = "0.12.0"
+edition = "2024"
+description = "Async meter and USB PD firmware."
+license = "MIT OR Apache-2.0"
+publish = false
+
+[[bin]]
+name = "firmware"
+path = "src/main.rs"
+test = false
+bench = false
+
+# A release image's first boot: unpacks the firmware (`firmware-pack`).
+[[bin]]
+name = "unpacker"
+path = "src/bin/unpacker.rs"
+test = false
+bench = false
+
+[features]
+# Exclusive charging logger variant; screenshot capture/export is replaced.
+charging-logger = []
+i2c-rx-poll-diagnostic = ["embassy-hc32/i2c-rx-poll-diagnostic"]
+# Hold Rd without starting a sink session; no GoodCRC or transmit.
+pd-hold-diagnostic = []
+# Boot on the PD page and append progress to the bounded flash log.
+pd-boot-diagnostic = []
+# Log cable inspection and fatal records without changing normal boot.
+cable-log = []
+# Read-only flash probe sections on the System page (bootloader, trailer,
+# upper sectors); never writes or erases.
+flash-probe = []
+# Classify and fingerprint the six dedicated capture sectors on the System page.
+capture-probe = []
+# Include a read-only dump of the dedicated capture region on the USB drive.
+capture-backup = ["firmware-core/capture-backup"]
+# Diagnostic build: export the dump and suppress capture/settings/energy writes.
+capture-diagnostic = ["capture-backup"]
+# Enable the device-specific cleanup prompt in the initialized application.
+capture-reclaim = []
+
+[dependencies]
+cortex-m = { workspace = true, features = ["critical-section-single-core"] }
+# The IRQ page measures stack use from cortex-m-rt's painted stack.
+cortex-m-rt = { workspace = true, features = ["paint-stack"] }
+embassy-executor = { workspace = true, features = ["platform-cortex-m", "executor-thread", "executor-interrupt"] }
+embassy-hc32.workspace = true
+embassy-sync.workspace = true
+embassy-time = { workspace = true, features = ["tick-hz-1_000"] }
+embedded-graphics.workspace = true
+embedded-hal-async.workspace = true
+firmware-core.workspace = true
+firmware-image.workspace = true
+fusb302-pd.workspace = true
+hc32f460-pac = { workspace = true, features = ["rt"] }
+panic-halt.workspace = true
+qc-protocol.workspace = true
+single-wire-protocols.workspace = true
+u8g2-fonts.workspace = true
+usb-device = { version = "0.3.2", default-features = false }
+usbpd.workspace = true

@@ -1,0 +1,7 @@
+{
+  "firmware-core/src/power_history.rs": {
+    "original_git_blob": "c6d84f6ee28d2e3c43204597718790ba16e84d7b",
+    "patched_sha256": "7f375b7090d89f9d0b7417529a3e0e3272d73ff3a04af08fb9587071e5ab32f4",
+    "reason": "Const empty history for C5 in-place startup; default values and runtime history behavior unchanged."
+  }
+}

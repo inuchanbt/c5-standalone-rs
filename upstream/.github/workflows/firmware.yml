@@ -1,0 +1,128 @@
+name: firmware
+
+on:
+  push:
+    branches: [main]
+    tags: ['firmware-v[0-9]+.*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    outputs:
+      verified_images: ${{ steps.firmware_package.outputs.verified }}
+    # Bound compilation and offline packaging without the six-hour default.
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install current stable Rust
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup component add rustfmt clippy
+          rustup target add thumbv7em-none-eabihf
+      - name: Validate firmware and packaging tools
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy -p firmware --all-features --target thumbv7em-none-eabihf --locked -- -D warnings
+          cargo clippy --workspace --exclude firmware --all-targets --locked -- -D warnings
+          cargo test -p firmware-core --test screenshot --features capture-backup --locked
+          cargo test -p firmware-pack --test cli --locked
+      - name: Build normal release firmware without diagnostic features
+        env:
+          BUILD_USB_VID: ${{ vars.KWS_X1_USB_VID }}
+          BUILD_USB_PID: ${{ vars.KWS_X1_USB_PID }}
+        run: |
+          if [[ -n "$BUILD_USB_VID" || -n "$BUILD_USB_PID" ]]; then
+            if [[ ! "$BUILD_USB_VID" =~ ^[[:xdigit:]]{4}$ || ! "$BUILD_USB_PID" =~ ^[[:xdigit:]]{4}$ ||
+                  "$BUILD_USB_VID" == 0000 || "$BUILD_USB_PID" == 0000 ||
+                  "${BUILD_USB_VID,,}:${BUILD_USB_PID,,}" == '1209:0001' ]]; then
+              echo 'Provide both authorized USB IDs, or leave both empty for shared MSC ID 16c0:27df' >&2
+              exit 1
+            fi
+            export KWS_X1_USB_VID="$BUILD_USB_VID" KWS_X1_USB_PID="$BUILD_USB_PID"
+          fi
+          cargo build --release -p firmware --target thumbv7em-none-eabihf --locked
+      - name: Prepare and audit flashable firmware
+        id: firmware_package
+        env:
+          VERIFIED_UPPER: ${{ vars.KWS_X1_VERIFIED_UPPER_SHA256 }}
+          VERIFIED_MAIN: ${{ vars.KWS_X1_VERIFIED_MAIN_SHA256 }}
+        run: |
+          mkdir -p dist
+          elf=target/thumbv7em-none-eabihf/release
+          for stage in upper main; do
+            name=firmware
+            if [[ "$stage" == upper ]]; then name=firmware-upper; fi
+            image="dist/$name.X1C"
+            cargo run --release -p firmware-pack --locked -- pack --stage "$stage" \
+              --firmware "$elf/firmware" --unpacker "$elf/unpacker" \
+              --out "$image" > "dist/$name-package.json"
+            image_sha256=$(sha256sum "$image" | cut -d ' ' -f 1)
+            cargo run --release -p firmware-pack --locked -- audit --stage "$stage" \
+              --image "$image" --confirm-sha256 "$image_sha256" \
+              --firmware "$elf/firmware" --unpacker "$elf/unpacker" \
+              > "dist/$name-audit.json"
+            cargo run --release -p flasher --locked -- \
+              --dry-run --image "$image" --confirm-sha256 "$image_sha256"
+          done
+          cp LICENSE-MIT LICENSE-APACHE docs/FLASHING.md dist/
+          verified=false
+          actual_upper=$(sha256sum dist/firmware-upper.X1C | cut -d ' ' -f 1)
+          actual_main=$(sha256sum dist/firmware.X1C | cut -d ' ' -f 1)
+          if [[ "$actual_upper" == "${VERIFIED_UPPER,,}" && "$actual_main" == "${VERIFIED_MAIN,,}" ]]; then
+            verified=true
+          fi
+          echo "verified=$verified" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF" == refs/tags/firmware-v* && "$verified" != true ]]; then
+            echo 'Release files must match both hardware-tested SHA-256 repository variables' >&2
+            exit 1
+          fi
+          cd dist
+          sha256sum firmware-upper.X1C firmware.X1C FLASHING.md LICENSE-MIT LICENSE-APACHE > SHA256SUMS
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.firmware_package.outputs.verified == 'true'
+        with:
+          name: firmware
+          if-no-files-found: error
+          path: dist/*
+
+  publish:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/firmware-v') && needs.build.outputs.verified_images == 'true'
+    needs: build
+    runs-on: ubuntu-24.04
+    # Publish only prevalidated files; cap stalled API requests.
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: firmware
+          path: dist
+      - name: Verify firmware downloads
+        working-directory: dist
+        run: sha256sum --check SHA256SUMS
+      - name: Publish firmware release
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          # A hyphenated tag (firmware-v0.7.1-test.1) is a test build: never Latest.
+          prerelease=()
+          if [[ "$RELEASE_TAG" == *-*-* ]]; then
+            prerelease=(--prerelease)
+          fi
+          gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --verify-tag --generate-notes "${prerelease[@]}" \
+            firmware-upper.X1C firmware.X1C SHA256SUMS FLASHING.md LICENSE-MIT LICENSE-APACHE
